@@ -1,0 +1,5 @@
+If you play some notes in FL Studio v9 or v10 using the computer keyboard
+via the piano roll, and then click in the plug-in GUI, then the notes will
+hang (presumably because keyboard focus has changed from FL Studio to the
+plug-in GUI). Without this commit the notes will not hang in this situation,
+but then the mouse wheel won't work at all in plug-in GUI in FL Studio.

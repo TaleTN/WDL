@@ -1,2 +1,2 @@
-Where is reads IPLUG_DIES_MIDI it should read IPLUG_KILLS_MIDI... oh no, I
+Where it reads IPLUG_DIES_MIDI it should read IPLUG_KILLS_MIDI... oh no, I
 mean IPLUG_DOES_MIDI, of course!

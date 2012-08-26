@@ -1,2 +1,6 @@
 Where it reads IPLUG_DIES_MIDI it should read IPLUG_KILLS_MIDI... oh no, I
 mean IPLUG_DOES_MIDI, of course!
+
+Note that when you specify PLUG_DOES_MIDI 2 (MIDI in only), the default
+ProcessMidiMsg() will still send out any messages it receives. To prevent
+this you will need to override ProcessMidiMsg() with e.g. a no-op.

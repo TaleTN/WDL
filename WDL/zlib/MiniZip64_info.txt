@@ -1,3 +1,5 @@
+WDL modifications: fix a shadowed variable warning and support non-C99 compilers
+
 MiniZip - Copyright (c) 1998-2010 - by Gilles Vollant - version 1.1 64 bits from Mathias Svensson
 
 Introduction

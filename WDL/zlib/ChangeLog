@@ -1,6 +1,11 @@
 
                 ChangeLog file for zlib
 
+1.2.13-WDL
+- subset of zlib
+- added a zlib_import.h
+- contrib/minizip is included in the same path and has some very small mods
+
 Changes in 1.2.13 (13 Oct 2022)
 - Fix configure issue that discarded provided CC definition
 - Correct incorrect inputs provided to the CRC functions

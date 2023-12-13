@@ -68,6 +68,10 @@ WDL_HASSTRINGS_EXPORT int hasStrings_isNonWordChar(const char *cptr)
 #define IS_UTF8_EXT1A_Y(b1, b2) ((b1)==0xc5 && (b2) >= 0xb6 && (b2) <= 0xb8)
 #define IS_UTF8_EXT1A_Z(b1, b2) ((b1)==0xc5 && (b2) >= 0xb9 && (b2) <= 0xbe)
 
+// U+300..U+36F are combining accents and get filtered/ignored
+#define IS_UTF8_SKIPPABLE(ca, nextc) \
+       (((((ca)&~1) == 0xCC) && ((nextc) >= 0x80 && (nextc) < ((ca) == 0xCD ? 0xAF : 0xc0))) ? 2 : 0)
+
 // returns negative if does not match but more of a is available to search
 // returns 0 if done searching without match
 // returns >0 if matches (return bytelen of match)
@@ -93,6 +97,12 @@ WDL_HASSTRINGS_EXPORT int hasStrings_utf8cmp(const unsigned char * const a, cons
             aidx+=3;
             ++b;
             --n;
+            continue;
+          }
+          const int skipl = IS_UTF8_SKIPPABLE(ca,a[aidx+1]);
+          if (skipl)
+          {
+            aidx += skipl;
             continue;
           }
           return -ca;
@@ -240,6 +250,13 @@ static const char *hasStrings_scan_for_char_match(const char *p, char v)
   }
 }
 
+WDL_HASSTRINGS_EXPORT const char *hasStrings_skipSkippable(const char *cptr)
+{
+  int skip;
+  while ((skip=IS_UTF8_SKIPPABLE(((unsigned char*)cptr)[0],((unsigned char*)cptr)[1]))>0) cptr+=skip;
+  return cptr;
+}
+
 WDL_HASSTRINGS_EXPORT bool WDL_hasStringsEx2(const char **name_list, int name_list_size, const LineParser *lp
 #ifdef WDL_HASSTRINGS_EXTRA_PARAMETERS
    WDL_HASSTRINGS_EXTRA_PARAMETERS
@@ -383,7 +400,10 @@ WDL_HASSTRINGS_EXPORT bool WDL_hasStringsEx2(const char **name_list, int name_li
           const char *t = name;
 
 #define MATCH_RIGHT_CHECK_WORD(SZ) \
-                (wc_right == 0 || ((const unsigned char*)(t))[SZ] < 2 || (wc_right > 1 && hasStrings_isNonWordChar((t)+(SZ))))
+                (wc_right == 0 || \
+                  ((const unsigned char*)(t))[SZ] < 2 || \
+                  (wc_right > 1 && hasStrings_isNonWordChar(hasStrings_skipSkippable((t)+(SZ)))) \
+                )
 
 #define MATCH_LEFT_SKIP_TO_WORD() do { \
                 if (*(unsigned char*)t < 2) { t++; break; } \
@@ -491,6 +511,16 @@ WDL_HASSTRINGS_EXPORT char *WDL_hasstrings_preproc_searchitem(char *wr, const ch
         src+=2;
       }
     }
+    else
+    {
+      const int skipl = IS_UTF8_SKIPPABLE(c, *(unsigned char*)src);
+      if (skipl > 0)
+      {
+        src += skipl-1;
+        continue;
+      }
+    }
+
     // we could also convert latin extended A characters to ascii here, but meh
     *wr++ = c;
   }

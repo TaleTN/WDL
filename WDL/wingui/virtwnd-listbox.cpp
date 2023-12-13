@@ -468,18 +468,28 @@ void WDL_VirtualListBox::OnPaint(LICE_IBitmap *drawbm, int origin_x, int origin_
             {
               m_font->SetTextColor(rev?bgc:color);
               m_font->SetCombineMode(LICE_BLIT_MODE_COPY, alpha); // maybe gray text only if !bkbm->bgimage
-              RECT dr = thisr;
+              RECT dr=thisr;
 #ifdef __APPLE__
               OffsetRect(&dr,0,2);
 #endif
-              if (m_align == 0)
-              {
-                RECT r2={0,};
+              const bool has_nl = strchr(buf,'\n') != NULL;
+              RECT r2 = { 0, };
+              if (has_nl || m_align == 0)
                 m_font->DrawText(drawbm,buf,-1,&r2,DT_CALCRECT|DT_NOPREFIX);
-                m_font->DrawText(drawbm,buf,-1,&dr,DT_VCENTER|((r2.right <= thisr.right-thisr.left) ? DT_CENTER : DT_LEFT)|DT_NOPREFIX);
+
+              int f = (m_align > 0 ? DT_RIGHT : ((m_align == 0 && r2.right <= thisr.right-thisr.left) ? DT_CENTER : DT_LEFT));
+
+              if (has_nl)
+              {
+                // can't use DT_VCENTER
+                OffsetRect(&dr,0,((dr.bottom-dr.top) - (r2.bottom-r2.top))/2);
               }
               else
-                m_font->DrawText(drawbm,buf,-1,&dr,DT_VCENTER|(m_align<0?DT_LEFT:DT_RIGHT)|DT_NOPREFIX);
+              {
+                f |= DT_SINGLELINE | DT_VCENTER;
+              }
+
+              m_font->DrawText(drawbm,buf,-1,&dr,f | DT_NOPREFIX);
             }
           }
         }

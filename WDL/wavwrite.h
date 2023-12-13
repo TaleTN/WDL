@@ -457,7 +457,7 @@ class WaveWriter
   private:
     static int fputi16(unsigned short a, FILE *fp)
     {
-    #if defined(WDL_LITTLE_ENDIAN) || defined(WDL_BIG_ENDIAN)
+    #ifdef WDL_BSWAP16_IF_BE
       WDL_BSWAP16_IF_BE(a);
       return (int)fwrite(&a,1,2,fp);
     #else
@@ -469,7 +469,7 @@ class WaveWriter
 
     static int fputi32(unsigned int a, FILE *fp)
     {
-    #if defined(WDL_LITTLE_ENDIAN) || defined(WDL_BIG_ENDIAN)
+    #ifdef WDL_BSWAP32_IF_BE
       WDL_BSWAP32_IF_BE(a);
       return (int)fwrite(&a,1,4,fp);
     #else
@@ -481,7 +481,7 @@ class WaveWriter
 
     static int fputi64(WDL_UINT64 a, FILE *fp)
     {
-    #if defined(WDL_LITTLE_ENDIAN) || defined(WDL_BIG_ENDIAN)
+    #ifdef WDL_BSWAP64_IF_BE
       WDL_BSWAP64_IF_BE(a);
       return (int)fwrite(&a,1,8,fp);
     #else

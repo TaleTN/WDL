@@ -147,7 +147,13 @@ public:
 
   // these represent lengths in samples at 44.1khz but are scaled accordingly
 #ifndef WDL_REVERB_MONO
-const int wdl_verb__stereospread=23;
+const int wdl_verb__stereospread=
+  #ifdef WDL_REVERB_STEREO_SPREAD
+  WDL_REVERB_STEREO_SPREAD
+  #else
+  23
+  #endif
+  ;
 #endif
 const short wdl_verb__combtunings[]={1116,1188,1277,1356,1422,1491,1557,1617,1685,1748};
 const short wdl_verb__allpasstunings[]={556,441,341,225,180,153};

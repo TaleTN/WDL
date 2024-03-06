@@ -1940,6 +1940,8 @@ LRESULT SendMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
   return 0;
 }
 
+static NSView *NavigateUpScrollClipViews(NSView *ch);
+
 void DestroyWindow(HWND hwnd)
 {
   if (WDL_NOT_NORMALLY(!hwnd)) return;
@@ -1950,6 +1952,7 @@ void DestroyWindow(HWND hwnd)
     KillTimer(hwnd,~(UINT_PTR)0);
     sendSwellMessage((id)pid,WM_DESTROY,0,0);
 
+    pid = NavigateUpScrollClipViews(pid);
     NSWindow *pw = [(NSView *)pid window];
     if (pw && [pw contentView] == pid) // destroying contentview should destroy top level window
     {
@@ -4529,6 +4532,47 @@ void ListView_InsertColumn(HWND h, int pos, const LVCOLUMN *lvc)
   SWELL_END_TRY(;)
 }
 
+void ListView_GetColumn(HWND h, int pos, LVCOLUMN *lvc)
+{
+  if (WDL_NOT_NORMALLY(!h || !lvc || ![(id)h isKindOfClass:[SWELL_ListView class]])) return;
+  SWELL_ListView *v=(SWELL_ListView *)h;
+  if (!v->m_cols || pos < 0 || pos >= v->m_cols->GetSize()) return;
+
+  NSTableColumn *col=v->m_cols->Get(pos);
+  if (!col) return;
+
+  if (lvc->mask&LVCF_FMT)
+  {
+    NSTextAlignment align = [[col headerCell] alignment];
+
+    if (align == NSCenterTextAlignment) lvc->fmt = LVCFMT_CENTER;
+    else if (align == NSRightTextAlignment) lvc->fmt = LVCFMT_RIGHT;
+    else lvc->fmt = LVCFMT_LEFT;
+  }
+  if (lvc->mask&LVCF_WIDTH)
+  {
+    if ([col respondsToSelector:@selector(isHidden)] && [(SWELL_TableColumnExtensions*)col isHidden])
+    {
+      lvc->cx=0;
+    }
+    else
+    {
+      lvc->cx = [col width];
+    }
+  }
+  if (lvc->mask&LVCF_TEXT)
+  {
+    if (!v->m_lbMode && !(v->style&LVS_NOCOLUMNHEADER))
+    {
+      if (WDL_NORMALLY(lvc->cchTextMax>0 && lvc->pszText))
+      {
+        NSString *lbl = [[col headerCell] stringValue];
+        SWELL_CFStringToCString(lbl,lvc->pszText,lvc->cchTextMax);
+      }
+    }
+  }
+}
+
 void ListView_SetColumn(HWND h, int pos, const LVCOLUMN *lvc)
 {
   if (WDL_NOT_NORMALLY(!h || !lvc || ![(id)h isKindOfClass:[SWELL_ListView class]])) return;
@@ -4783,6 +4827,8 @@ bool ListView_GetItem(HWND h, LVITEM *item)
       nm.item.pszText = item->pszText;
       nm.item.cchTextMax = item->cchTextMax;
       SendMessage(GetParent(h),WM_NOTIFY,nm.hdr.idFrom,(LPARAM)&nm);
+      if ((mask & LVIF_TEXT) && nm.item.pszText != item->pszText)
+        lstrcpyn_safe(item->pszText, nm.item.pszText ? nm.item.pszText : "", item->cchTextMax);
       if (mask & LVIF_PARAM) item->lParam = nm.item.lParam;
     }
   }

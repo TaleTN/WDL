@@ -1271,13 +1271,15 @@ int WDL_ConvolutionEngine_Thread::Avail(int wantSamples)
 
   if (m_thread_engine.m_zl_delaypos >= 0)
   {
-    m_samplesout_lock.Enter();
-    av=m_samplesout[0].Available();
-    m_samplesout_lock.Leave();
-    while (av < wantSamples)
+    for (int retry = 3;; --retry)
     {
-      int a;
-      if (WDL_CONVO_thread_state)
+      m_samplesout_lock.Enter();
+      av=m_samplesout[0].Available();
+      m_samplesout_lock.Leave();
+
+      if (av >= wantSamples) break;
+
+      if (WDL_CONVO_thread_state && retry)
       {
 #ifdef _WIN32
         SetEvent(m_signal_thread);
@@ -1286,16 +1288,12 @@ int WDL_ConvolutionEngine_Thread::Avail(int wantSamples)
         WDL_CONVO_cond_signal(&m_signal_thread, &m_signal_thread_cond, &m_signal_thread_mutex);
         WDL_CONVO_cond_wait(&m_signal_main, &m_signal_main_cond, &m_signal_main_mutex);
 #endif
-
-        m_samplesout_lock.Enter();
-        a=m_samplesout[0].Available();
-        m_samplesout_lock.Leave();
       }
       else
       {
-        a=av;
+        wantSamples=av;
+        break;
       }
-      if (a>av) av=a; else wantSamples=av;
     }
   }
 

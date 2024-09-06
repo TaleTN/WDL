@@ -1193,8 +1193,7 @@ void WDL_ConvolutionEngine_Thread::Reset()
   m_zl_engine.Reset();
   m_thread_engine.Reset();
 
-  int x;
-  for (x = 0; x < WDL_CONVO_MAX_PROC_NCH; x ++)
+  for (int x = 0; x < WDL_CONVO_MAX_PROC_NCH; x ++)
   {
     m_samplesin[x].Clear();
     m_samplesin2[x].Clear();
@@ -1223,9 +1222,8 @@ void WDL_ConvolutionEngine_Thread::Add(WDL_FFT_REAL **bufs, int len, int nch)
 
   if (m_thread_engine.m_zl_delaypos >= 0 && CreateThread())
   {
-    int ch;
     m_samplesin_lock.Enter();
-    for (ch = 0; ch < nch; ch ++)
+    for (int ch = 0; ch < nch; ch ++)
     {
       m_samplesin[ch].Add(bufs ? bufs[ch] : NULL,len*sizeof(WDL_FFT_REAL));
     }
@@ -1242,8 +1240,7 @@ void WDL_ConvolutionEngine_Thread::Add(WDL_FFT_REAL **bufs, int len, int nch)
 
 WDL_FFT_REAL **WDL_ConvolutionEngine_Thread::Get()
 {
-  int x;
-  for (x = 0; x < m_proc_nch; x ++)
+  for (int x = 0; x < m_proc_nch; x ++)
   {
     m_get_tmpptrs[x]=(WDL_FFT_REAL *)m_samplesout2[x].Get();
   }
@@ -1252,8 +1249,7 @@ WDL_FFT_REAL **WDL_ConvolutionEngine_Thread::Get()
 
 void WDL_ConvolutionEngine_Thread::Advance(int len)
 {
-  int x;
-  for (x = 0; x < m_proc_nch; x ++)
+  for (int x = 0; x < m_proc_nch; x ++)
   {
     m_samplesout2[x].Advance(len*sizeof(WDL_FFT_REAL));
     m_samplesout2[x].Compact();
@@ -1263,7 +1259,6 @@ void WDL_ConvolutionEngine_Thread::Advance(int len)
 int WDL_ConvolutionEngine_Thread::Avail(int wantSamples)
 {
   int wso=wantSamples;
-  int x;
 
   int av=m_samplesout2[0].Available()/sizeof(WDL_FFT_REAL);
   if (av >= wantSamples) return av;
@@ -1303,7 +1298,7 @@ int WDL_ConvolutionEngine_Thread::Avail(int wantSamples)
   if (wantSamples>0)
   {
     WDL_FFT_REAL *tp[WDL_CONVO_MAX_PROC_NCH];
-    for (x =0; x < m_proc_nch; x ++)
+    for (int x =0; x < m_proc_nch; x ++)
     {
       memset(tp[x]=(WDL_FFT_REAL*)m_samplesout2[x].Add(NULL,wantSamples*sizeof(WDL_FFT_REAL)),0,wantSamples*sizeof(WDL_FFT_REAL));
     }
@@ -1311,8 +1306,7 @@ int WDL_ConvolutionEngine_Thread::Avail(int wantSamples)
     WDL_FFT_REAL **p=m_zl_engine.Get();
     if (p)
     {
-      int i;
-      for (i =0; i < m_proc_nch; i ++)
+      for (int i =0; i < m_proc_nch; i ++)
       {
         WDL_FFT_REAL *o=tp[i];
         WDL_FFT_REAL *in=p[i];
@@ -1326,8 +1320,7 @@ int WDL_ConvolutionEngine_Thread::Avail(int wantSamples)
     {
       m_samplesout_lock.Enter();
       {
-        int i;
-        for (i =0; i < m_proc_nch; i ++)
+        for (int i =0; i < m_proc_nch; i ++)
         {
           WDL_FFT_REAL *o=tp[i];
           WDL_FFT_REAL *in=(WDL_FFT_REAL *)m_samplesout[i].Get();
@@ -1430,14 +1423,14 @@ void *WDL_ConvolutionEngine_Thread::ThreadProc(void *lpParam)
 
     if (_this->m_thread_state)
     {
-      int avail, av, x;
+      int avail, av;
 
       _this->m_samplesin_lock.Enter();
       avail = _this->m_samplesin[0].Available();
       while (avail > 0)
       {
         int sz;
-        for (x = 0; x < _this->m_proc_nch; x ++)
+        for (int x = 0; x < _this->m_proc_nch; x ++)
         {
           void *buf=NULL;
           sz=_this->m_samplesin[x].GetPtr(0,&buf);
@@ -1453,12 +1446,12 @@ void *WDL_ConvolutionEngine_Thread::ThreadProc(void *lpParam)
       {
         WDL_FFT_REAL *tp[WDL_CONVO_MAX_PROC_NCH];
         int sz;
-        for (x = 0; x < _this->m_proc_nch; x ++)
+        for (int x = 0; x < _this->m_proc_nch; x ++)
         {
           sz=_this->m_samplesin2[x].GetPtr(0,(void**)&tp[x]);
         }
         _this->m_thread_engine.Add(tp,sz/sizeof(WDL_FFT_REAL),_this->m_proc_nch);
-        for (x = 0; x < _this->m_proc_nch; x ++)
+        for (int x = 0; x < _this->m_proc_nch; x ++)
         {
           _this->m_samplesin2[x].Advance(sz);
         }
@@ -1478,7 +1471,7 @@ void *WDL_ConvolutionEngine_Thread::ThreadProc(void *lpParam)
       {
         WDL_FFT_REAL **p=_this->m_thread_engine.Get();
         _this->m_samplesout_lock.Enter();
-        for (x = 0; x < _this->m_proc_nch; x ++)
+        for (int x = 0; x < _this->m_proc_nch; x ++)
         {
           _this->m_samplesout[x].Add(p[x],av*sizeof(WDL_FFT_REAL));
         }

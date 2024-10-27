@@ -1034,7 +1034,8 @@ static void OnConfigureEvent(GdkEventConfigure *cfg)
   hwnd->m_position.bottom = cfg->y + cfg->height;
   if (flag&1) SendMessage(hwnd,WM_MOVE,0,0);
   if (flag&2) SendMessage(hwnd,WM_SIZE,hwnd->m_is_maximized ? SIZE_MAXIMIZED : SIZE_RESTORED,0);
-  if (!hwnd->m_hashaddestroy && hwnd->m_oswindow) swell_recalcMinMaxInfo(hwnd);
+  if (!hwnd->m_hashaddestroy && hwnd->m_oswindow && (hwnd->m_style & WS_THICKFRAME))
+    swell_recalcMinMaxInfo(hwnd);
 }
 
 static void OnWindowStateEvent(GdkEventWindowState *evt)
@@ -2601,6 +2602,34 @@ static LRESULT xbridgeProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
               gdk_window_raise(bs->w);
               bs->lastvis = true;
             }
+          }
+        }
+      }
+    break;
+    case WM_USER+1000: // allow parent to query size of child window
+      if (hwnd && hwnd->m_private_data && wParam && lParam)
+      {
+        bridgeState *bs = (bridgeState*)hwnd->m_private_data;
+        if (bs->native_disp && bs->native_w)
+        {
+          Window root, par, *list=NULL;
+          unsigned int nlist=0;
+          // if a plug-in created a window on a separate X11 connection, it might not be valid yet.
+          if (XQueryTree(bs->native_disp,bs->native_w,&root,&par,&list, &nlist))
+          {
+            if (!list || !nlist)
+            {
+              if (list) XFree(list);
+              return 0;
+            }
+            XWindowAttributes attr;
+            memset(&attr,0,sizeof(attr));
+            if (XGetWindowAttributes(bs->native_disp, list[0], &attr) && attr.width && attr.height)
+            {
+              *((int *)(INT_PTR)wParam) = attr.width;
+              *((int *)(INT_PTR)lParam) = attr.height;
+            }
+            XFree(list);
           }
         }
       }

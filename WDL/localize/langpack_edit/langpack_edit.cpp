@@ -35,6 +35,7 @@
 
 #include "../../localize/localize.h"
 #include "../../lineparse.h"
+void WDL_fgets_as_utf8(char *linebuf, int linebuf_size, FILE *fp, int *format_flag); // defined in localize.cpp
 
 #define WDL_HASSTRINGS_REWUTF8_HOOK(str, base) \
  if ((str) > (base)) switch ((str)[0]) { \
@@ -108,6 +109,7 @@ bool g_quit;
 
 HINSTANCE g_hInstance;
 WDL_FastString g_ini_file;
+static bool s_comment_reent;
 
 enum {
   COL_STATE=0, // if we edit these need to edit the IDs of ID_COL_* in resource.h
@@ -176,7 +178,13 @@ struct editor_instance {
   WDL_WndSizer m_resize;
 
   void load_file(const char *filename, bool is_template);
-  void save_file(const char *filename);
+  void save_file(const char *filename, bool verbose=false);
+  bool import_for_view(FILE *fp);
+  void export_for_view(FILE *fp, int col)
+  {
+    for (int i = 0; i < m_display_order.GetSize(); i ++)
+      fprintf(fp,"%s\n", get_row_value(i, col));
+  }
 
   void cull_recs();
   void refresh_list(bool refilter=true);
@@ -297,9 +305,9 @@ static const char *parse_section_id(const char *k, char *buf, int bufsz) // retu
   return p+1;
 }
 
-void editor_instance::save_file(const char *filename)
+void editor_instance::save_file(const char *filename, bool verbose)
 {
-  FILE *fp = fopen(filename,"wb");
+  FILE *fp = fopenUTF8(filename,"wb");
   if (!fp)
   {
     MessageBox(m_hwnd,__LOCALIZE("Error opening file for writing","langpackedit"),
@@ -337,6 +345,8 @@ void editor_instance::save_file(const char *filename)
         }
         fprintf(fp,"\r\n[%s]%s\r\n",sec,trail);
       }
+      if (verbose && rec->template_str)
+        fprintf(fp,";%s=%s\r\n",id,rec->template_str);
       fprintf(fp,"%s=%s\r\n",id,rec->pack_str);
     }
   }
@@ -439,9 +449,67 @@ void editor_instance::load_file(const char *filename, bool is_template)
       }
       if (fs.GetLength())
         WDL_remove_trailing_whitespace((char *)fs.Get());
+      s_comment_reent=true;
       SetDlgItemText(m_hwnd,IDC_COMMENTS,fs.Get());
+      s_comment_reent=false;
     }
   }
+}
+
+bool editor_instance::import_for_view(FILE *fp)
+{
+  char linebuf[16384];
+  int utf8flag = -1, lcnt=0;
+  for (;;)
+  {
+    WDL_fgets_as_utf8(linebuf,sizeof(linebuf),fp,&utf8flag);
+    if (!linebuf[0]) break;
+    lcnt++;
+  }
+  if (lcnt != m_display_order.GetSize())
+  {
+    snprintf(linebuf,sizeof(linebuf),__LOCALIZE_VERFMT("Text file has %d lines, editor view %d lines. Import anyway?","langpackedit"),
+        lcnt, m_display_order.GetSize());
+    if (MessageBox(m_hwnd,linebuf, __LOCALIZE("Error","langpackedit"),MB_YESNO) == IDNO)
+    {
+      return false;
+    }
+  }
+
+  fseek(fp,0,SEEK_SET);
+  utf8flag = -1;
+  lcnt=0;
+  int errcnt=0;
+  for (;;)
+  {
+    WDL_fgets_as_utf8(linebuf,sizeof(linebuf),fp,&utf8flag);
+    if (!linebuf[0]) break;
+    WDL_remove_trailing_crlf(linebuf);
+    if (lcnt < m_display_order.GetSize())
+    {
+      int rec_idx = m_display_order.Get()[lcnt];
+      const char *k;
+      pack_rec *r = m_recs.EnumeratePtr(rec_idx,&k);
+      if (WDL_NORMALLY(k && r))
+      {
+        free(r->pack_str);
+        r->pack_str = strdup(linebuf);
+      }
+      else
+        errcnt++;
+    }
+    lcnt++;
+  }
+
+  refresh_list(false);
+  set_dirty();
+  if (errcnt)
+  {
+    snprintf(linebuf,sizeof(linebuf),__LOCALIZE_VERFMT("Warning: %d lines could not be imported (this should not happen!)","langpackedit"),
+        errcnt);
+    MessageBox(m_hwnd,linebuf, __LOCALIZE("Warning","langpackedit"),MB_OK);
+  }
+  return true;
 }
 
 void editor_instance::cull_recs()
@@ -454,12 +522,33 @@ void editor_instance::cull_recs()
   }
 }
 
+static bool filt_amper_str(const char *v, WDL_FastString *s)
+{
+  const char *nv = v;
+  while (*nv && *nv != '&') nv++;
+  if (!*nv) return false;
+  s->Set("");
+  // v=leading string, nv=next ampersand
+  for (;;)
+  {
+    if (nv > v) s->Append(v, (int) (nv-v));
+    if (!*nv) return true;
+    v = ++nv; // skip ampersand
+    if (*nv) nv++; // allow any trailing ampersand
+    while (*nv && *nv != '&') nv++;
+  }
+}
+
 void editor_instance::refresh_list(bool refilter)
 {
   HWND list = WDL_NORMALLY(m_hwnd) ? GetDlgItem(m_hwnd,IDC_LIST) : NULL;
   if (!refilter)
   {
-    if (list) ListView_RedrawItems(list, 0, m_display_order.GetSize());
+    if (list)
+    {
+      ListView_SetItemCount(list, m_display_order.GetSize());
+      ListView_RedrawItems(list, 0, m_display_order.GetSize());
+    }
     return;
   }
   WDL_IntKeyedArray<bool> selState;
@@ -495,15 +584,20 @@ void editor_instance::refresh_list(bool refilter)
     else
       r->common_idx = -1;
 
-    const char *strs[COL_MAX];
+    const char *strs[COL_MAX*2];
     int nc = 0;
     if (do_filt)
     {
-      for (int c =0; c < COL_MAX; c ++)
+      static WDL_FastString amp_filt[COL_MAX];
+      for (int c = 0; c < COL_MAX; c ++)
       {
         if (m_column_no_searchflags & (1<<c)) continue;
         const char *v = get_rec_value(r,k,c);
-        if (v) strs[nc++] = v;
+        if (v)
+        {
+          strs[nc++] = v;
+          if (filt_amper_str(v, &amp_filt[c])) strs[nc++] = amp_filt[c].Get();
+        }
       }
     }
 
@@ -717,6 +811,7 @@ bool editor_instance::edit_row(int row, int other_action)
               if (!m_recs.GetPtr(sec))
               {
                 pack_rec newr = { 0 };
+                newr.common_idx = -1;
                 m_recs.Insert(sec,newr);
                 int idx = m_recs.GetIdx(sec);
                 if (WDL_NORMALLY(idx>=0))
@@ -960,20 +1055,107 @@ WDL_DLGRET mainProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
             SetTimer(hwndDlg,TIMER_FILTER,100,NULL);
           }
         break;
+        case IDC_COMMENTS:
+          if (HIWORD(wParam) == EN_CHANGE && !s_comment_reent)
+          {
+            g_editor.set_dirty();
+          }
+        break;
+        case IDC_PACK_IMPORT_CURVIEW:
+          {
+            char vbuf[2048];
+            GetPrivateProfileString("LangPackEdit","lastexpl","",vbuf,sizeof(vbuf),g_ini_file.Get());
+
+            char *f = WDL_ChooseFileForOpen(hwndDlg,
+                __LOCALIZE("Choose text file to import localized lines","langpackedit"),
+                NULL,
+                vbuf,
+                "Text files (*.txt)\0*.*\0All files (*.*)\0*.*\0",
+                "txt",
+                false, false);
+            if (f)
+            {
+              FILE *fp = fopenUTF8(f,"rb");
+
+              if (fp)
+              {
+                if (g_editor.import_for_view(fp))
+                  WritePrivateProfileString("LangPackEdit","lastexpl",f,g_ini_file.Get());
+                fclose(fp);
+              }
+              else
+              {
+                MessageBox(hwndDlg,__LOCALIZE("Error opening file for writing","langpackedit"),
+                  __LOCALIZE("Error","langpackedit"),MB_OK);
+              }
+              free(f);
+            }
+          }
+
+        break;
+
+        case IDC_PACK_EXPORT_CURVIEW_TEMPLATE:
+        case IDC_PACK_EXPORT_CURVIEW_LOCALIZED:
+          {
+            char newfn[2048], vbuf[2048];
+            const char *inikey = LOWORD(wParam)==IDC_PACK_EXPORT_CURVIEW_TEMPLATE ? "lastexpt" : "lastexpl";
+            GetPrivateProfileString("LangPackEdit",inikey,"",vbuf,sizeof(vbuf),g_ini_file.Get());
+            if (!WDL_ChooseFileForSave(hwndDlg,
+                  LOWORD(wParam) == IDC_PACK_EXPORT_CURVIEW_TEMPLATE ?  __LOCALIZE("Export current view template lines as text","langpackedit") :
+                     __LOCALIZE("Export current view localized lines as text","langpackedit"),
+                  NULL,
+                  vbuf,
+                  "Text files (*.txt)\0*.*\0All files (*.*)\0*.*\0",
+                  "txt",
+                  false,
+                  newfn,sizeof(newfn)) || !newfn[0]) return 0;
+
+            FILE *fp = fopenUTF8(newfn,"wb");
+            if (fp)
+            {
+              g_editor.export_for_view(fp,LOWORD(wParam) == IDC_PACK_EXPORT_CURVIEW_TEMPLATE ? COL_TEMPLATE : COL_LOCALIZED);
+              fclose(fp);
+              WritePrivateProfileString("LangPackEdit",inikey,newfn,g_ini_file.Get());
+            }
+            else
+            {
+              MessageBox(hwndDlg,__LOCALIZE("Error opening file for writing","langpackedit"),
+                __LOCALIZE("Error","langpackedit"),MB_OK);
+            }
+          }
+        break;
+
+        case IDC_PACK_SAVE_AS_VERBOSE:
         case IDC_PACK_SAVE_AS:
         case IDC_PACK_SAVE:
-
-          if (!g_editor.m_pack_fn.GetLength() || LOWORD(wParam) == IDC_PACK_SAVE_AS)
+          if (!g_editor.m_pack_fn.GetLength() || LOWORD(wParam) == IDC_PACK_SAVE_AS || LOWORD(wParam) == IDC_PACK_SAVE_AS_VERBOSE)
           {
             char newfn[2048];
-            if (!WDL_ChooseFileForSave(hwndDlg, __LOCALIZE("Save LangPack as...","langpackedit"),
+            char vbuf[2048];
+            if (LOWORD(wParam) == IDC_PACK_SAVE_AS_VERBOSE)
+              GetPrivateProfileString("LangPackEdit","lastpackv","",vbuf,sizeof(vbuf),g_ini_file.Get());
+            else vbuf[0]=0;
+            if (!WDL_ChooseFileForSave(hwndDlg,
+                  LOWORD(wParam) == IDC_PACK_SAVE_AS_VERBOSE ?  __LOCALIZE("Export Verbose LangPack","langpackedit") :
+                     __LOCALIZE("Save LangPack","langpackedit"),
                   NULL,
-                  g_editor.m_pack_fn.Get(),
+                  vbuf[0] ? vbuf : g_editor.m_pack_fn.Get(),
                   "All files (*.*)\0*.*\0",
                   "",
                   false,
                   newfn,sizeof(newfn)) || !newfn[0]) return 0;
 
+            if (LOWORD(wParam) == IDC_PACK_SAVE_AS_VERBOSE)
+            {
+              g_editor.save_file(newfn, true);
+              WritePrivateProfileString("LangPackEdit","lastpackv",newfn,g_ini_file.Get());
+              if (!strcmp(newfn, g_editor.m_pack_fn.Get()))
+              {
+                g_editor.m_dirty=false;
+                g_editor.set_caption();
+              }
+              break;
+            }
             g_editor.m_pack_fn.Set(newfn);
             WritePrivateProfileString("LangPackEdit","lastpack",newfn,g_ini_file.Get());
             SetDlgItemText(hwndDlg,IDC_PACK,newfn);
@@ -1043,9 +1225,9 @@ WDL_DLGRET mainProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
               const int nn = ListView_GetItemCount(list);
               if (n < nn)
               {
-                ListView_EnsureVisible(list,n,false);
                 for (int i = n; i < nn; i ++)
                   ListView_SetItemState(list,i,LVIS_SELECTED,LVIS_SELECTED);
+                ListView_EnsureVisible(list,nn-1,false);
               }
             }
           }

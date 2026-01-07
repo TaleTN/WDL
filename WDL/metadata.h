@@ -34,7 +34,7 @@ int MetadataToArray(WDL_StringKeyedArray<char*> *metadata, WDL_TypedBuf<const ch
   for (int i=0; i < metadata->GetSize(); ++i)
   {
     const char *k, *v=metadata->Enumerate(i, &k);
-    if (k && v)
+    if (k && v && v[0])
     {
       metadata_arr->Add(k);
       metadata_arr->Add(v);
@@ -590,12 +590,6 @@ int PackIXMLChunk(WDL_HeapBuf *hb, WDL_StringKeyedArray<char*> *metadata, int pa
       ParseUserDefMetadata(key, val, &k, &v, &klen, &vlen);
       key=k;
       val=v;
-    }
-
-    if (!strncmp(val, "#junk#", 6))
-    {
-      junklen += 11+2*strlen(key)+strlen(val);
-      continue;
     }
 
     ixml.Append("<");

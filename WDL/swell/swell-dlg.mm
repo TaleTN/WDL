@@ -37,7 +37,9 @@
 #ifndef SWELL_NO_METAL
 #undef min
 #undef max
+#ifdef __SSE__
 #include <simd/simd.h>
+#endif
 #import <QuartzCore/CAMetalLayer.h>
 #import <Metal/Metal.h>
 #include "../assocarray.h"
@@ -696,6 +698,11 @@ static id<MTLDevice> mtl_def_device()
   return m_wndproc ? m_wndproc((HWND)self,msg,wParam,lParam) : 0;
 }
 
+- (BOOL) clipsToBounds
+{
+  return YES;
+}
+
 - (BOOL) isEnabled
 {
   return m_enabled;
@@ -1102,14 +1109,11 @@ static id<MTLDevice> mtl_def_device()
     m_paintctx_used=1;
     ps->hdc = m_paintctx_hdc;
     ps->fErase=false;
-    NSRECT_TO_RECT(&ps->rcPaint,m_paintctx_rect);
 
-    // should NC_CALCSIZE to convert, but this will be good enough to fix this small scrollbar overdraw bug
-    RECT r;
+    RECT r,r2;
+    NSRECT_TO_RECT(&r2,m_paintctx_rect);
     GetClientRect((HWND)self,&r);
-    if (ps->rcPaint.right > r.right) ps->rcPaint.right = r.right;
-    if (ps->rcPaint.bottom > r.bottom) ps->rcPaint.bottom = r.bottom;
-    
+    IntersectRect(&ps->rcPaint, &r2, &r);
   }
 }
 

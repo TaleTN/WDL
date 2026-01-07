@@ -2731,6 +2731,7 @@ BOOL SetDlgItemText(HWND hwnd, int idx, const char *text)
   else if ([obj isKindOfClass:[NSBox class]])
   {
     [(NSBox *)obj setTitle:lbl];
+    [obj setNeedsDisplay:YES];
   }
   else
   {
@@ -5691,10 +5692,10 @@ HDC BeginPaint(HWND hwnd, PAINTSTRUCT *ps)
   if (WDL_NOT_NORMALLY(!ps)) return 0;
   memset(ps,0,sizeof(PAINTSTRUCT));
   if (WDL_NOT_NORMALLY(!hwnd)) return 0;
-  id turd = (id)hwnd;
-  if (![turd respondsToSelector:@selector(getSwellPaintInfo:)]) return 0;
+  SWELL_hwndChild *h = (SWELL_hwndChild *)hwnd;
+  if (![h respondsToSelector:@selector(getSwellPaintInfo:)]) return 0;
 
-  [(SWELL_hwndChild*)turd getSwellPaintInfo:(PAINTSTRUCT *)ps];
+  [h getSwellPaintInfo:(PAINTSTRUCT *)ps];
   return ps->hdc;
 }
 

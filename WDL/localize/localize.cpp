@@ -204,7 +204,6 @@ const char *__localizeFunc(const char *str, const char *subctx, int flags)
 
   char *newptr = NULL;
 
-  int trycnt;
   size_t len = strlen(str)+1;
 
   if (flags & LOCALIZE_FLAG_DOUBLENULL)
@@ -229,7 +228,8 @@ const char *__localizeFunc(const char *str, const char *subctx, int flags)
   else
     hash = WDL_FNV64(WDL_FNV64_IV,(const unsigned char *)str,(int)len);
 
-  for (trycnt=0;trycnt<2 && !newptr;trycnt++)
+  const int ntry = (flags & LOCALIZE_FLAG_NOCOMMON) ? 1 : 2;
+  for (int trycnt=0; trycnt<ntry && !newptr;trycnt++)
   {
     WDL_KeyedArray<WDL_UINT64, char *> *section = trycnt == 1 ? g_translations_commonsec : g_translations.Get(subctx);
 
@@ -1033,7 +1033,17 @@ HWND __localizeDialog(HINSTANCE hInstance, const char *lpTemplate, HWND hwndPare
   switch (mode)
   {
     case 0: return CreateDialogParam(hInstance,lpTemplate,hwndParent,dlgProc,lParam);
-    case 1: return (HWND) (INT_PTR)DialogBoxParam(hInstance,lpTemplate,hwndParent,dlgProc,lParam);
+    case 1:
+    {
+#ifdef WDL_LOCALIZE_HOOK_DIALOGBOX_BEGIN
+      WDL_LOCALIZE_HOOK_DIALOGBOX_BEGIN
+#endif
+      HWND ret = (HWND) (INT_PTR)DialogBoxParam(hInstance,lpTemplate,hwndParent,dlgProc,lParam);
+#ifdef WDL_LOCALIZE_HOOK_DIALOGBOX_END
+      WDL_LOCALIZE_HOOK_DIALOGBOX_END
+#endif
+      return ret;
+    }
   }
   return 0;
 }
@@ -1162,6 +1172,11 @@ void WDL_fgets_as_utf8(char *linebuf, int linebuf_size, FILE *fp, int *format_fl
 WDL_KeyedArray<WDL_UINT64, char *> *WDL_GetLangpackSection(const char *sec)
 {
   return g_translations.Get(sec);
+}
+
+WDL_KeyedArray<WDL_UINT64, char *> *WDL_EnumLangpackSections(int idx, const char **secname)
+{
+  return g_translations.Enumerate(idx,secname);
 }
 
 WDL_KeyedArray<WDL_UINT64, char *> *WDL_LoadLanguagePackInternal(const char *fn,

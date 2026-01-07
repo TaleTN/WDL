@@ -143,12 +143,26 @@ static bool g_swell_mouse_relmode;
 static int g_swell_mouse_relmode_curpos_x;
 static int g_swell_mouse_relmode_curpos_y;
 
-static HANDLE s_clipboard_getstate, s_clipboard_setstate;
-static GdkAtom s_clipboard_getstate_fmt, s_clipboard_setstate_fmt;
 
-static WDL_IntKeyedArray<HANDLE> m_clip_recs(GlobalFree);
-static WDL_PtrList<char> m_clip_curfmts;
+//// clipboard state
+static HANDLE s_clipboard_getstate; // currently retrieving data/format via req_clipboard() (either GetClipboardData() or EnumClipboardFormats(0))
+static GdkAtom s_clipboard_getstate_fmt;
+
+static WDL_PtrSet<UINT> s_clipboard_enumstate; // populated on first EnumClipboardFormats() call, or by SetClipboardData()
+
+struct clip_fmt {
+  const char *str;
+  GdkAtom atom;
+};
+static WDL_TypedBuf<clip_fmt> s_clip_fmts; // mapping of UINT clipboard types, offset by 1 (s_clip_fmts.Get()[0] is CF_TEXT=1, etc)
+
 static HWND s_clip_hwnd;
+
+// clipboard data added by SetClipboardData():
+static WDL_TypedBuf<GdkAtom> s_clipboard_setstate; // stored as separate lists so we can easily pass to properties
+static WDL_TypedBuf<HANDLE> s_clipboard_setstate_data;
+
+static bool s_clipboard_written; // has clipboard data been written-to since opening
 
 static void swell_gdkEventHandler(GdkEvent *event, gpointer data);
 
@@ -842,11 +856,40 @@ static GdkAtom tgtatom()
   if (!tmp) tmp = gdk_atom_intern_static_string("TARGETS");
   return tmp;
 }
+static GdkAtom atomatom()
+{
+  static GdkAtom tmp;
+  if (!tmp) tmp = gdk_atom_intern_static_string("ATOM");
+  return tmp;
+}
 static GdkAtom urilistatom() 
 {
   static GdkAtom tmp;
   if (!tmp) tmp = gdk_atom_intern_static_string("text/uri-list");
   return tmp;
+}
+
+static bool atom_from_clipboard_type(int type, GdkAtom *atom)
+{
+  type--;
+  if (type < 0 || type >= s_clip_fmts.GetSize()) return false;
+  *atom = s_clip_fmts.Get()[type].atom;
+  return true;
+}
+
+static UINT clipboard_type_from_atom(GdkAtom atom)
+{
+  for (int x = 0; x < s_clip_fmts.GetSize(); x++)
+    if (s_clip_fmts.Get()[x].atom == atom) return x+1;
+  return 0;
+}
+
+static HANDLE *find_clipboard_setstate(GdkAtom a)
+{
+  for (int x = 0; x < s_clipboard_setstate.GetSize(); x ++)
+    if (s_clipboard_setstate.Get()[x] == a)
+      return s_clipboard_setstate_data.Get() + x;
+  return NULL;
 }
 
 
@@ -875,38 +918,35 @@ static void OnSelectionRequestEvent(GdkEventSelection *b)
       SendMessage(swell_dragsrc_hwnd,WM_USER+100,(WPARAM)b,(LPARAM)&prop);
     }
   }
-  else if (s_clipboard_setstate)
+  else if (s_clipboard_setstate.GetSize())
   {
     if (b->target == tgtatom())
     {
-      if (s_clipboard_setstate_fmt)
-      {
-        prop = b->property;
-        GdkAtom list[] = { s_clipboard_setstate_fmt };
+      prop = b->property;
 #if SWELL_TARGET_GDK == 2
-        GdkWindow *pw = gdk_window_lookup(b->requestor);
-        if (!pw) pw = gdk_window_foreign_new(b->requestor);
+      GdkWindow *pw = gdk_window_lookup(b->requestor);
+      if (!pw) pw = gdk_window_foreign_new(b->requestor);
 #else
-        GdkWindow *pw = b->requestor;
+      GdkWindow *pw = b->requestor;
 #endif
-        if (pw)
-          gdk_property_change(pw,prop,GDK_SELECTION_TYPE_ATOM,32, GDK_PROP_MODE_REPLACE,(guchar*)list,(int) (sizeof(list)/sizeof(list[0])));
-      }
+      if (pw)
+        gdk_property_change(pw,prop,GDK_SELECTION_TYPE_ATOM,32, GDK_PROP_MODE_REPLACE,(guchar*)s_clipboard_setstate.Get(), (int) s_clipboard_setstate.GetSize());
     }
     else 
     {
-      if (b->target == s_clipboard_setstate_fmt || 
-          (b->target == GDK_TARGET_STRING && s_clipboard_setstate_fmt == utf8atom())
-         )
+      const GdkAtom sf = b->target == GDK_TARGET_STRING ? utf8atom() : b->target;
+      HANDLE *state = find_clipboard_setstate(sf);
+
+      if (state)
       {
         prop = b->property;
-        int len = GlobalSize(s_clipboard_setstate);
-        guchar *ptr = (guchar*)s_clipboard_setstate;
+        int len = GlobalSize(*state);
+        guchar *ptr = (guchar*)*state;
 
         WDL_FastString str;
-        if (s_clipboard_setstate_fmt == utf8atom())
+        if (sf == utf8atom())
         {
-          const char *rd = (const char *)s_clipboard_setstate;
+          const char *rd = (const char *)*state;
           while (*rd)
           {
             if (!strncmp(rd,"\r\n",2))
@@ -920,7 +960,7 @@ static void OnSelectionRequestEvent(GdkEventSelection *b)
           ptr = (guchar *)str.Get();
           len = str.GetLength();
         }
-        else if (s_clipboard_setstate_fmt == urilistatom())
+        else if (sf == urilistatom())
         {
           if (len > (int)sizeof(DROPFILES))
           {
@@ -1579,7 +1619,8 @@ static void OnSelectionNotifyEvent(GdkEventSelection *b)
 
   s_ddrop_hwnd=NULL;
 
-  if (s_clipboard_getstate) { GlobalFree(s_clipboard_getstate); s_clipboard_getstate=NULL; }
+  GlobalFree(s_clipboard_getstate);
+  s_clipboard_getstate=NULL;
   guchar *gptr=NULL;
   GdkAtom fmt;
   gint unitsz=0;
@@ -1599,8 +1640,9 @@ static void OnSelectionNotifyEvent(GdkEventSelection *b)
       if (fmt == GDK_TARGET_STRING || fmt == utf8atom())
       {
         int lastc=0;
-        while (sz-->0)
+        while (sz >= unitsz/8)
         {
+          sz -= unitsz/8;
           int c;
           if (unitsz==32) { c = *(unsigned int *)ptr; ptr+=4; }
           else if (unitsz==16)  { c = *(unsigned short *)ptr; ptr+=2; }
@@ -1627,7 +1669,6 @@ static void OnSelectionNotifyEvent(GdkEventSelection *b)
         ptr = (guchar*)str.Get();
         sz=str.GetLength()+1;
       }
-      else if (unitsz>8) sz *= (unitsz/8);
 
       s_clipboard_getstate = GlobalAlloc(0,sz);
       if (s_clipboard_getstate)
@@ -2130,12 +2171,13 @@ bool OpenClipboard(HWND hwndDlg)
 {
   RegisterClipboardFormat(NULL);
   s_clip_hwnd=hwndDlg ? hwndDlg : SWELL_topwindows; 
-  if (s_clipboard_getstate)
-  {
-    GlobalFree(s_clipboard_getstate);
-    s_clipboard_getstate = NULL;
-  }
+  s_clipboard_written = false;
+
+  GlobalFree(s_clipboard_getstate);
+  s_clipboard_getstate = NULL;
   s_clipboard_getstate_fmt = NULL;
+
+  s_clipboard_enumstate.DeleteAll();
 
   return true; 
 }
@@ -2143,17 +2185,25 @@ bool OpenClipboard(HWND hwndDlg)
 static HANDLE req_clipboard(GdkAtom type)
 {
   if (s_clipboard_getstate_fmt == type) return s_clipboard_getstate;
+  if (type == tgtatom() && s_clipboard_getstate_fmt == atomatom())
+    return s_clipboard_getstate;
 
   HWND h = s_clip_hwnd;
   while (h && !h->m_oswindow) h = h->m_parent;
 
   if (h && SWELL_gdk_active > 0)
   {
-    if (s_clipboard_getstate)
+    GlobalFree(s_clipboard_getstate);
+    s_clipboard_getstate=NULL;
+
+    GdkDisplay *disp = gdk_window_get_display(h->m_oswindow);
+    if (WDL_NORMALLY(disp) &&
+        None == XGetSelectionOwner(gdk_x11_display_get_xdisplay(disp),
+                                   gdk_x11_atom_to_xatom_for_display(disp, GDK_SELECTION_CLIPBOARD)))
     {
-      GlobalFree(s_clipboard_getstate);
-      s_clipboard_getstate=NULL;
+      return NULL;
     }
+
     gdk_selection_convert(h->m_oswindow,GDK_SELECTION_CLIPBOARD,type,GDK_CURRENT_TIME);
  
     GMainContext *ctx=g_main_context_default();
@@ -2165,8 +2215,20 @@ static HANDLE req_clipboard(GdkAtom type)
         GdkEvent *evt;
         while (!s_clipboard_getstate && gdk_events_pending() && (evt = gdk_event_get()))
         {
-          if (evt->type == GDK_SELECTION_NOTIFY || evt->type == GDK_SELECTION_REQUEST)
-            swell_gdkEventHandler(evt,(gpointer)1);
+          switch (evt->type)
+          {
+            case GDK_SELECTION_NOTIFY:
+            case GDK_SELECTION_REQUEST:
+            case GDK_EXPOSE:
+            case GDK_CONFIGURE:
+            case GDK_WINDOW_STATE:
+            case GDK_GRAB_BROKEN:
+              swell_gdkEventHandler(evt,(gpointer)1);
+            break;
+            default:
+              // not ideal to drop events, but hm
+            break;
+          }
           gdk_event_free(evt);
         }
       }
@@ -2174,6 +2236,8 @@ static HANDLE req_clipboard(GdkAtom type)
       if (s_clipboard_getstate) 
       {
         if (s_clipboard_getstate_fmt == type) return s_clipboard_getstate;
+        if (type == tgtatom() && s_clipboard_getstate_fmt == atomatom())
+          return s_clipboard_getstate;
         return NULL;
       }
 
@@ -2186,56 +2250,74 @@ static HANDLE req_clipboard(GdkAtom type)
 
 void CloseClipboard() 
 { 
+  s_clipboard_written = false;
+  s_clipboard_enumstate.DeleteAll();
   s_clip_hwnd=NULL; 
 }
 
 UINT EnumClipboardFormats(UINT lastfmt)
 {
-  if (lastfmt == CF_TEXT) return CF_HDROP;
-  if (!lastfmt)
+  if (lastfmt == 0 && !s_clipboard_enumstate.GetSize())
   {
-    // checking this causes issues (reentrancy, I suppose?)
-    //if (req_clipboard(utf8atom()))
-    return CF_TEXT;
+    HANDLE h = req_clipboard(tgtatom());
+    if (!h) return 0;
+    int sz = GlobalSize(h) / (int)sizeof(GdkAtom);
+    const char *l = (const char *)h;
+    for (int x = 0; x < sz; x ++)
+    {
+      GdkAtom a;
+      memcpy(&a,l + x*sizeof(GdkAtom), sizeof(a));
+      UINT c = clipboard_type_from_atom(a);
+      if (c) s_clipboard_enumstate.Insert(c);
+    }
   }
-  if (lastfmt == CF_HDROP) lastfmt = 0;
 
-  int x=0;
-  for (;;)
-  {
-    int fmt=0;
-    if (!m_clip_recs.Enumerate(x++,&fmt)) return 0;
-    if (lastfmt == 0) return fmt;
-
-    if ((UINT)fmt == lastfmt) return m_clip_recs.Enumerate(x++,&fmt) ? fmt : 0;
-  }
+  int x = 0;
+  UINT fmt;
+  if (lastfmt) while (s_clipboard_enumstate.Enumerate(x++,&fmt) && fmt != lastfmt);
+  return s_clipboard_enumstate.Enumerate(x,&fmt) ? fmt : 0;
 }
 
 HANDLE GetClipboardData(UINT type)
 {
   RegisterClipboardFormat(NULL);
-  if (type == CF_TEXT)
-    return req_clipboard(utf8atom());
 
-  if (type == CF_HDROP)
-    return req_clipboard(urilistatom());
+  GdkAtom a;
+  if (atom_from_clipboard_type(type,&a))
+  {
+    return req_clipboard(a);
+  }
 
-  return m_clip_recs.Get(type);
+  return NULL;
 }
 
 
 void EmptyClipboard()
 {
-  m_clip_recs.DeleteAll();
+  for (int x = 0; x < s_clipboard_setstate_data.GetSize(); x ++)
+    GlobalFree(s_clipboard_setstate_data.Get()[x]);
+  s_clipboard_setstate.Resize(0);
+  s_clipboard_setstate_data.Resize(0);
 }
 
 void SetClipboardData(UINT type, HANDLE h)
 {
   RegisterClipboardFormat(NULL);
-  if (type == CF_TEXT || type == CF_HDROP)
+  GdkAtom a;
+  if (atom_from_clipboard_type(type,&a))
   {
-    if (s_clipboard_setstate) { GlobalFree(s_clipboard_setstate); s_clipboard_setstate=NULL; }
-    s_clipboard_setstate_fmt=NULL;
+    HANDLE *state = find_clipboard_setstate(a);
+    if (!state)
+    {
+      s_clipboard_setstate.Add(a);
+      s_clipboard_setstate_data.Add(h);
+    }
+    else if (*state != h)
+    {
+      GlobalFree(*state);
+      *state = h;
+    }
+
     static GdkWindow *w;
     if (!w)
     {
@@ -2246,33 +2328,40 @@ void SetClipboardData(UINT type, HANDLE h)
       attr.window_type = GDK_WINDOW_TOPLEVEL;
       w = gdk_window_new(NULL,&attr,0);
     }
-    if (w)
+    if (w && !s_clipboard_written)
     {
-      s_clipboard_setstate_fmt = type == CF_HDROP ? urilistatom() : utf8atom();
-      s_clipboard_setstate = h;
+      s_clipboard_written = true;
+      s_clipboard_enumstate.DeleteAll();
       gdk_selection_owner_set(w,GDK_SELECTION_CLIPBOARD,GDK_CURRENT_TIME,TRUE);
     }
-    return;
+    if (WDL_NORMALLY(type != 0))
+      s_clipboard_enumstate.Insert(type);
   }
-  if (h) m_clip_recs.Insert(type,h);
-  else m_clip_recs.Delete(type);
 }
 
 UINT RegisterClipboardFormat(const char *desc)
 {
-  if (!m_clip_curfmts.GetSize())
+  if (!s_clip_fmts.GetSize())
   {
-    m_clip_curfmts.Add(strdup("SWELL__CF_TEXT"));
-    m_clip_curfmts.Add(strdup("SWELL__CF_HDROP"));
+    clip_fmt c[2] = {
+      { "SWELL__CF_TEXT", utf8atom() },
+      { "SWELL__CF_HDROP", urilistatom() },
+    };
+    s_clip_fmts.Add(c,sizeof(c)/sizeof(c[0]));
   }
 
   if (!desc || !*desc) return 0;
-  int x;
-  const int n = m_clip_curfmts.GetSize();
-  for(x=0;x<n;x++) 
-    if (!strcmp(m_clip_curfmts.Get(x),desc)) return x + 1;
-  m_clip_curfmts.Add(strdup(desc));
-  return n+1;
+
+  for (int x = 0; x < s_clip_fmts.GetSize(); x++)
+    if (!strcmp(s_clip_fmts.Get()[x].str,desc)) return x + 1;
+
+  char tmp[512];
+  snprintf(tmp,sizeof(tmp),"application/swell-%s",desc);
+
+  clip_fmt c1 = { strdup(desc), gdk_atom_intern(tmp, 0) };
+  s_clip_fmts.Add(c1);
+
+  return s_clip_fmts.GetSize();
 }
 
 

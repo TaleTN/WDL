@@ -68,6 +68,9 @@ struct HTREEITEM__;
 
 #ifdef SWELL_TARGET_OSX
 
+int SWELL_osx_dialog_scaling(HWND hwnd);
+#define SWELL_DLGSCALE_FACTOR (1.7/256.0)
+
 #if 0
   // at some point we should enable this and use it in most SWELL APIs that call Cocoa code...
   #define SWELL_BEGIN_TRY @try { 
@@ -235,6 +238,9 @@ typedef struct WindowPropRec
 -(void)mouseUp:(NSEvent *)theEvent;
 - (void)rightMouseUp:(NSEvent *)theEvent;
 - (void)highlightSelectionInClipRect:(NSRect)theClipRect;
+- (void)setFrame:(NSRect)r;
+- (NSRect)rectOfColumn:(NSInteger)column;
+- (NSRect)rectOfRow:(NSInteger) row;
 
 // data source
 -(NSInteger) outlineView:(NSOutlineView *)outlineView numberOfChildrenOfItem:(id)item;
@@ -289,6 +295,7 @@ typedef struct WindowPropRec
   int m_fastClickMask;	
   NSColor *m_fgColor;
   NSMutableArray *m_selColors;
+  NSFont *m_nsFont; // font to use for cells (used by ListView_InsertColumn, etc), may be NULL for default
 
   // these are for the new yosemite mouse handling code
   int m_last_plainly_clicked_item, m_last_shift_clicked_item;
@@ -302,6 +309,8 @@ typedef struct WindowPropRec
 -(NSInteger)columnAtPoint:(NSPoint)pt;
 -(int)getColumnPos:(int)idx; // get current position of column that was originally at idx
 -(int)getColumnIdx:(int)pos; // get original index of column that is currently at position
+-(void)setFont:(NSFont *)font;
+-(void)setFrame:(NSRect)r;
 
 -(BOOL)accessibilityPerformShowMenu;
 @end
@@ -406,6 +415,8 @@ typedef struct WindowPropRec
   id m_lastTopLevelOwner; // save a copy of the owner, if any
   id m_access_cacheptrs[6];
   const char *m_classname;
+
+  int m_dlg_dpi; // latched dpi for this window, SWELL_osx_dialog_scaling() uses (0 unset, 256=1.7, etc)
 
 // only used if not SWELL_NO_METAL
   char m_use_metal; // 1=normal mode, 2=full pipeline (GetDC() etc support). -1 is for non-metal async layered mode. -2 for non-metal non-async layered
@@ -676,6 +687,7 @@ struct HGDIOBJ__
  
   // if using CoreText to draw text
   void *ct_FontRef;
+  float ct_realInternalLeading, ct_realAscender, ct_realDescender; // we calculate these once, CTFontGet*() are not reliable
   char font_quality;
 };
 
@@ -973,6 +985,9 @@ struct HDC__ {
 
   RECT dirty_rect; // in surface coordinates, used for GetWindowDC()/GetDC()/etc
   bool dirty_rect_valid;
+
+  LICE_IBitmap *surface_save; // swell-gdi-lice SWELL_PushClipRgn only supports one item
+  POINT surface_offs_save;
 #else
   void *ownedData; // for mem contexts, support a null rendering 
 #endif

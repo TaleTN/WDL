@@ -85,6 +85,7 @@ static void wdl_utf8_correctlongpath(WCHAR *buf)
 
 static ATOM s_combobox_atom;
 #define WDL_UTF8_OLDPROCPROP "WDLUTF8OldProc"
+#define WDL_UTF8_OLDPROCPROP_LVSTATE WDL_UTF8_OLDPROCPROP "BG"
 
 #ifdef _DEBUG
 static int wdl_utf8_validate_classname(HWND h, const char *n)
@@ -688,6 +689,22 @@ BOOL CopyFileUTF8(LPCTSTR existfn, LPCTSTR newfn, BOOL fie)
   return CopyFileA(existfn,newfn,fie);
 }
 
+DWORD GetFileAttributesUTF8(LPCTSTR path)
+{
+  if (WDL_HasUTF8_FILENAME(path) AND_IS_NOT_WIN9X)
+  {
+    MBTOWIDE(wbuf,path);
+    if (wbuf_ok) wdl_utf8_correctlongpath(wbuf);
+    if (wbuf_ok)
+    {
+      DWORD rv=GetFileAttributesW(wbuf);
+      MBTOWIDE_FREE(wbuf);
+      return rv;
+    }
+    MBTOWIDE_FREE(wbuf);
+  }
+  return GetFileAttributesA(path);
+}
 
 DWORD GetModuleFileNameUTF8(HMODULE hModule, LPTSTR lpBuffer, DWORD nBufferLength)
 {
@@ -1689,7 +1706,7 @@ static LRESULT WINAPI tv_newProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
 }
 
 struct lv_tmpbuf_state {
-  WCHAR *buf;
+  WCHAR *buf; // must be allocated with GlobalAlloc/GlobalFree
   int buf_sz;
 };
 
@@ -1700,13 +1717,13 @@ static LRESULT WINAPI lv_newProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
 
   if (msg==WM_NCDESTROY)
   {
-    struct lv_tmpbuf_state *buf = (struct lv_tmpbuf_state *)GetProp(hwnd,WDL_UTF8_OLDPROCPROP "B");
+    struct lv_tmpbuf_state *buf = (struct lv_tmpbuf_state *)GetProp(hwnd,WDL_UTF8_OLDPROCPROP_LVSTATE);
     if (buf)
     {
-      free(buf->buf);
-      free(buf);
+      if (buf->buf) GlobalFree(buf->buf);
+      GlobalFree(buf);
     }
-    RemoveProp(hwnd,WDL_UTF8_OLDPROCPROP "B");
+    RemoveProp(hwnd,WDL_UTF8_OLDPROCPROP_LVSTATE);
 
     SetWindowLongPtr(hwnd, GWLP_WNDPROC,(INT_PTR)oldproc);
     RemoveProp(hwnd,WDL_UTF8_OLDPROCPROP);
@@ -1810,6 +1827,7 @@ static LRESULT WINAPI lv_newProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
 
 void WDL_UTF8_HookListView(HWND h)
 {
+  char buf[64];
   WDL_ASSERT(wdl_utf8_validate_classname(h,"SysListView32"));
   if (WDL_NOT_NORMALLY(!h) ||
     #ifdef WDL_SUPPORT_WIN9X
@@ -1818,7 +1836,14 @@ void WDL_UTF8_HookListView(HWND h)
     GetProp(h,WDL_UTF8_OLDPROCPROP)) return;
   SetProp(h,WDL_UTF8_OLDPROCPROP,(HANDLE)SetWindowLongPtr(h,GWLP_WNDPROC,(INT_PTR)lv_newProc));
 
-  SetProp(h,WDL_UTF8_OLDPROCPROP "B", (HANDLE)calloc(sizeof(struct lv_tmpbuf_state),1));
+  SetProp(h,WDL_UTF8_OLDPROCPROP_LVSTATE, (HANDLE)GlobalAlloc(GMEM_ZEROINIT,sizeof(struct lv_tmpbuf_state)));
+  if (WDL_NORMALLY(GetClassName(h,buf,sizeof(buf))) &&
+      WDL_NORMALLY(!strcmp(buf,"SysListView32"))
+      // && (GetWindowLong(h,GWL_STYLE) & LVS_OWNERDATA) // probably best to always do this?
+      )
+  {
+    SendMessage(h, LVM_SETUNICODEFORMAT, 1, 0);
+  }
 }
 
 void WDL_UTF8_HookTreeView(HWND h)
@@ -1848,6 +1873,10 @@ void WDL_UTF8_HookTabCtrl(HWND h)
 void WDL_UTF8_ListViewConvertDispInfoToW(void *_di)
 {
   NMLVDISPINFO *di = (NMLVDISPINFO *)_di;
+
+  // if this fires, then caller forgot to call HookListView or LVM_SETUNICODEFORMAT
+  WDL_ASSERT(!di || di->hdr.code != LVN_GETDISPINFOA || GetVersion() >= 0x80000000);
+
   if (di &&
       di->hdr.code == LVN_GETDISPINFOW &&
       (di->item.mask & LVIF_TEXT) && di->item.pszText && di->item.cchTextMax>0)
@@ -1855,7 +1884,7 @@ void WDL_UTF8_ListViewConvertDispInfoToW(void *_di)
     static struct lv_tmpbuf_state s_buf;
     const char *src = (const char *)di->item.pszText;
     const size_t src_sz = strlen(src);
-    struct lv_tmpbuf_state *sb = (struct lv_tmpbuf_state *)GetProp(di->hdr.hwndFrom,WDL_UTF8_OLDPROCPROP "B");
+    struct lv_tmpbuf_state *sb = (struct lv_tmpbuf_state *)GetProp(di->hdr.hwndFrom,WDL_UTF8_OLDPROCPROP_LVSTATE);
     if (WDL_NOT_NORMALLY(!sb)) sb = &s_buf; // if the caller forgot to call HookListView...
 
     if (!sb->buf || sb->buf_sz < src_sz)
@@ -1863,8 +1892,8 @@ void WDL_UTF8_ListViewConvertDispInfoToW(void *_di)
       const int newsz = (int) wdl_min(src_sz * 2 + 256, 0x7fffFFFF);
       if (!sb->buf || sb->buf_sz < newsz)
       {
-        free(sb->buf);
-        sb->buf = (WCHAR *)malloc((sb->buf_sz = newsz) * sizeof(WCHAR));
+        if (sb->buf) GlobalFree(sb->buf);
+        sb->buf = (WCHAR *)GlobalAlloc(GMEM_ZEROINIT,(sb->buf_sz = newsz) * sizeof(WCHAR));
       }
     }
     if (WDL_NOT_NORMALLY(!sb->buf))

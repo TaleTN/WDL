@@ -1167,6 +1167,9 @@ static bool m_sizetofits;
 
 void SWELL_MakeSetCurParms(float xscale, float yscale, float xtrans, float ytrans, HWND parent, bool doauto, bool dosizetofit)
 {
+  if (xscale == 0.0) xscale = SWELL_DEF_DLGSCALE2;
+  if (yscale == 0.0) yscale = SWELL_DEF_DLGSCALE2;
+
   if (g_swell_ui_scale != 256 && xscale != 1.0f && yscale != 1.0f)
   {
     const float m = g_swell_ui_scale/256.0f;
@@ -3334,18 +3337,30 @@ static LRESULT WINAPI labelWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
               if (text[0])
               {
                 RECT tmp={0,};
-                const int line_h = DrawText(ps.hdc," ",1,&tmp,DT_SINGLELINE|DT_NOPREFIX|DT_CALCRECT|f);
-                if (r.bottom > line_h*5/3)
+                const bool has_nl = !!strchr(text,'\n');
+                const int line_h = DrawText(ps.hdc,has_nl ? " " : text,-1,&tmp,DT_SINGLELINE|DT_NOPREFIX|DT_CALCRECT|f);
+                if (r.bottom > line_h*5/3 && (tmp.right > r.right-r.left || has_nl))
                 {
-                  int loffs=0;
-                  while (text[loffs] && r.top < r.bottom)
+                  // tall label that doesn't fit text as a single line:
+                  // first pass, measure height of wrapped text, second pass draw the text vertically centered
+                  for (int pass = 0; pass < 2; pass ++)
                   {
-                    int post=0, lb=swell_getLineLength(text+loffs, &post, r.right, ps.hdc);
-                    if (lb>0)
-                      DrawText(ps.hdc,text+loffs,lb,&r,DT_TOP|DT_SINGLELINE|DT_LEFT|f);
-                    r.top += line_h;
-                    loffs+=lb+post;
+                    int loffs = 0, ypos = r.top;
+                    while (text[loffs] && ypos < r.bottom)
+                    {
+                      int post=0, lb=swell_getLineLength(text+loffs, &post, r.right, ps.hdc);
+                      if (lb>0 && pass)
+                      {
+                        r.top = ypos;
+                        DrawText(ps.hdc,text+loffs,lb,&r,DT_TOP|DT_SINGLELINE|DT_LEFT|f);
+                      }
+                      ypos += line_h;
+                      loffs+=lb+post;
+                    }
+                    if (!pass && ypos < r.bottom)
+                      r.top += (r.bottom-ypos)/2; // vertical center
                   }
+
                   text = "";
                 }
               }
@@ -4183,6 +4198,7 @@ static LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
   static POINT s_clickpt;
   switch (msg)
   {
+    case WM_MOUSEHWHEEL:
     case WM_MOUSEWHEEL:
       if ((GetAsyncKeyState(VK_CONTROL)&0x8000) || (GetAsyncKeyState(VK_MENU)&0x8000)) break; // pass modified mousewheel to parent
 
@@ -4190,7 +4206,7 @@ static LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         const int amt = ((short)HIWORD(wParam))/40;
         if (amt && lvs)
         {
-          if (GetAsyncKeyState(VK_SHIFT)&0x8000)
+          if ((GetAsyncKeyState(VK_SHIFT) ^ (msg==WM_MOUSEHWHEEL?0x8000:0))&0x8000)
           {
             const int oldscroll = lvs->m_scroll_x;
             lvs->m_scroll_x -= amt*4;
@@ -7455,7 +7471,7 @@ LRESULT DefWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (dc)
         {
           if (!menubar_font) 
-            menubar_font = CreateFont(g_swell_ctheme.menubar_font_size,0,0,0,FW_NORMAL,0,0,0,0,0,0,0,0,g_swell_deffont_face);
+            menubar_font = CreateFont(-wdl_abs(g_swell_ctheme.menubar_font_size),0,0,0,FW_NORMAL,0,0,0,0,0,0,0,0,g_swell_deffont_face);
 
           RECT r;
           GetWindowContentViewRect(hwnd,&r);

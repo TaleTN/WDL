@@ -319,6 +319,7 @@ static int eel_validate_format_specifier(const char *fmt_in, char *typeOut,
 {
   const char *fmt = fmt_in+1;
   int state=0;
+  int precision = 0;
   if (fmt_in[0] != '%') return 0; // ugh passed a non-specifier
 
   *varOut_used = 0;
@@ -362,6 +363,8 @@ static int eel_validate_format_specifier(const char *fmt_in, char *typeOut,
     {
       *fmtOut++ = c; fmtOut_sz--;
       state|=4;
+      precision = precision * 10 + (c-'0');
+      if (precision > 1000) return 0; // invalid precision
     }
     else if (c == '{')
     {
@@ -1267,7 +1270,8 @@ static EEL_F NSEEL_CGEN_CALL _eel_strsetchar2(void *opaque, INT_PTR np, EEL_F **
       if (l>=0 && l <= wl) 
       {
         const int flags=eel_getchar_flag((int) parms[3][0]);
-        if (l==wl) 
+        const int charlen = (flags&0xf);
+        if (l + charlen > wl)
         {
           if (wl > EEL_STRING_MAXUSERSTRING_LENGTH_HINT)
           {
@@ -1277,9 +1281,15 @@ static EEL_F NSEEL_CGEN_CALL _eel_strsetchar2(void *opaque, INT_PTR np, EEL_F **
           }
           else
           {
+            if (l < wl)
+            {
+              // write of multi-byte value that begins before end of string
+              // but grows the string, shorten and re-append
+              wr->SetLen(l);
+            }
             char buf[32];
             eel_setchar_do(flags,buf,parms[2][0]);
-            wr->AppendRaw(buf,flags&0xf);
+            wr->AppendRaw(buf,charlen);
           }
         }
         else

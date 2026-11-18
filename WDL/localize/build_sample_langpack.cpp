@@ -26,6 +26,9 @@ static bool isblankorz(char c)
   return !c || isblank(c);
 }
 
+
+WDL_StringKeyedArray<char*> section_renames;
+
 WDL_StringKeyedArray<char *> section_descs;
 
 WDL_StringKeyedArray< WDL_PtrList<char> * > translations;
@@ -33,6 +36,8 @@ WDL_StringKeyedArray< WDL_StringKeyedArray<bool> * > translations_indexed;
 
 void gotString(const char *str, int len, const char *secname, bool isRC, const char *fn, int line)
 {
+  const char *st = section_renames.Get(secname);
+  if (st) secname = st;
   WDL_PtrList<char> *sec=translations.Get(secname);
   if (!sec)
   {
@@ -310,7 +315,8 @@ void processRCfile(FILE *fp, const char *dirprefix, const char *filename)
         exit(1);
       }
       sprintf(sname,"%s%s%s_%d",dirprefix?dirprefix:"",dirprefix?"_":"",second_tok[0] == 'M' ? "MENU" : "DLG",sec);
-      section_descs.Insert(sname,strdup(first_tok));
+      const char *usn = section_renames.Get(sname);
+      section_descs.Insert(usn ? usn : sname,strdup(first_tok));
     }
     else if (sname[0] && *second_tok && *first_tok)
     {
@@ -505,9 +511,14 @@ int main(int argc, char **argv)
       else if (!strcmp(argv[x],"--utf8test")) casemode = 4;
       else if (!strcmp(argv[x],"--upper")) casemode = 1;
       else if (!strcmp(argv[x],"--template")) casemode = 3;
+      else if (!strcmp(argv[x],"--secren") && x+2 < argc)
+      {
+        section_renames.Insert(argv[x+1],strdup(argv[x+2]));
+        x+=2;
+      }
       else
       {
-        printf("Usage: build_sample_langpack [--leet|--lower|--upper|--template] file.rc file.cpp ...\n");
+        printf("Usage: build_sample_langpack [--leet|--lower|--upper|--template] [--secren src dest] file.rc file.cpp ...\n");
         exit(1);
       }
       continue;

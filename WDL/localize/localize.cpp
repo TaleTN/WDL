@@ -358,7 +358,10 @@ void __localizeMenu(const char *rescat, HMENU hMenu, LPCSTR lpMenuName)
   if (hMenu && a>0&&a<65536)
   {
     char buf[128];
-    sprintf(buf,"%sMENU_%d",rescat?rescat:"",(int)a);
+    snprintf(buf,sizeof(buf),"%sMENU_%d",rescat?rescat:"",(int)a);
+#ifdef LOCALIZE_FIXUP_DLG_RESOURCE_STR
+    LOCALIZE_FIXUP_DLG_RESOURCE_STR(buf);
+#endif
     WDL_KeyedArray<WDL_UINT64, char *> *s = g_translations.Get(buf);
     if (s)
     {
@@ -1015,12 +1018,18 @@ DLGPROC __localizePrepareDialog(const char *rescat, HINSTANCE hInstance, const c
   {
     char buf[128];
     snprintf(buf,sizeof(buf),"%sDLG_%d",rescat?rescat:"",(int)a);
+#ifdef LOCALIZE_FIXUP_DLG_RESOURCE_STR
+    LOCALIZE_FIXUP_DLG_RESOURCE_STR(buf);
+#endif
     s = g_translations.Get(buf);
 #ifdef _WIN32
     int menuid = __getMenuIdFromDlgResource(hInstance,lpTemplate);
     if (menuid)
     {
       snprintf(buf,sizeof(buf),"%sMENU_%d",rescat?rescat:"",menuid);
+#ifdef LOCALIZE_FIXUP_DLG_RESOURCE_STR
+      LOCALIZE_FIXUP_DLG_RESOURCE_STR(buf);
+#endif
       s2=g_translations.Get(buf);
     }
 #endif
@@ -1046,6 +1055,9 @@ HWND __localizeDialog(HINSTANCE hInstance, const char *lpTemplate, HWND hwndPare
   {
     p[4] = tmp;
     snprintf(tmp,sizeof(tmp),"DLG%d",(int)(INT_PTR)lpTemplate);
+#ifdef LOCALIZE_FIXUP_DLG_RESOURCE_STR
+    LOCALIZE_FIXUP_DLG_RESOURCE_STR(tmp);
+#endif
   }
   else
     p[4] = NULL;

@@ -416,6 +416,7 @@ void WDL_VirtualIconButton::OnPaint(LICE_IBitmap *drawbm, int origin_x, int orig
     if (brcol != -100)
     {
       RECT r=m_position;
+      ScaleRect(&r,rscale);
 
       int bh=(r.bottom-r.top)/5;
       if (bh<1) bh=1;

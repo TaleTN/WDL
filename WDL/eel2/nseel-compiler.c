@@ -3305,7 +3305,7 @@ static int compileNativeFunctionCall(compileContext *ctx, opcodeRec *op, unsigne
         )
     {
       // emit fxch
-      if (bufOut_len < sizeof(GLUE_FXCH)) RET_MINUS1_FAIL("len,fxch")
+      if (bufOut_len < parm_size + sizeof(GLUE_FXCH)) RET_MINUS1_FAIL("len,fxch")
       if (bufOut) 
       { 
         memcpy(bufOut+parm_size,GLUE_FXCH,sizeof(GLUE_FXCH));

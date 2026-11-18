@@ -1754,6 +1754,7 @@ EEL_F eel_lice_state::gfx_setcursor(void* opaque, EEL_F** parms, int nparms)
 
   const char *p = NULL;
 #ifdef EEL_LICE_LOADTHEMECURSOR
+  EEL_STRING_MUTEXLOCK_SCOPE
   if (nparms > 1) p=EEL_STRING_GET_FOR_INDEX(parms[1][0], NULL);
 
   if (strcmp(p?p:"",m_cursor_name.Get()))
